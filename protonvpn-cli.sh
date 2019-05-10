@@ -212,11 +212,11 @@ function init_cli() {
     echo "$decrease_openvpn_privileges" > "$(get_protonvpn_cli_home)/.decrease_openvpn_privileges"
   fi
 
-  # Disabling killswitch prompt
-  #read -p "[.] Enable Killswitch? [Y/n]: " "enable_killswitch"
-  #if [[ "$enable_killswitch" == "y" || "$enable_killswitch" == "Y" || "$enable_killswitch" == "" ]]; then
-  #  echo > "$(get_protonvpn_cli_home)/.enable_killswitch"
-  #fi
+  #killswitch prompt
+  read -p "[.] Enable Killswitch? [Y/n]: " "enable_killswitch"
+  if [[ "$enable_killswitch" == "y" || "$enable_killswitch" == "Y" || "$enable_killswitch" == "" ]]; then
+    echo > "$(get_protonvpn_cli_home)/.enable_killswitch"
+  fi
 
   config_cache_path="$(get_protonvpn_cli_home)/openvpn_cache/"
   rm -rf "$config_cache_path"
@@ -446,7 +446,7 @@ function openvpn_disconnect() {
       if [[ $(is_openvpn_currently_running) == false ]]; then
         modify_dns revert_to_backup # Reverting to original DNS entries
         disconnected=true
-        # killswitch disable # Disabling killswitch
+        killswitch disable # Disabling killswitch
         cp "$(get_protonvpn_cli_home)/.connection_config_id" "$(get_protonvpn_cli_home)/.previous_connection_config_id" 2> /dev/null
         cp "$(get_protonvpn_cli_home)/.connection_selected_protocol" "$(get_protonvpn_cli_home)/.previous_connection_selected_protocol" 2> /dev/null
         rm -f  "$(get_protonvpn_cli_home)/.connection_config_id" "$(get_protonvpn_cli_home)/.connection_selected_protocol" 2> /dev/null
@@ -482,7 +482,7 @@ function openvpn_connect() {
 
   modify_dns backup # Backing-up current DNS entries.
   manage_ipv6 disable # Disabling IPv6 on machine.
-  # killswitch backup_rules # Backing-up firewall rules.
+  killswitch backup_rules # Backing-up firewall rules.
 
   config_id=$1
   selected_protocol=$2
@@ -544,7 +544,7 @@ function openvpn_connect() {
           modify_dns to_protonvpn_dns # Use ProtonVPN DNS server.
         fi
 
-        # killswitch enable # Enable killswitch
+        killswitch enable # Enable killswitch
 
         echo "$config_id" > "$(get_protonvpn_cli_home)/.connection_config_id"
         echo "$selected_protocol" > "$(get_protonvpn_cli_home)/.connection_selected_protocol"
@@ -734,11 +734,12 @@ function print_console_status() {
 }
 
 function get_openvpn_config_info() {
-  vpn_ip=$(awk '$1 == "remote" {print $2}' "$(get_protonvpn_cli_home)/protonvpn_openvpn_config.conf" | head -n 1)
-  vpn_port=$(awk '$1 == "remote" {print $3}' "$(get_protonvpn_cli_home)/protonvpn_openvpn_config.conf" | head -n 1)
   vpn_type=$(awk '$1 == "proto" {print $2}' "$(get_protonvpn_cli_home)/protonvpn_openvpn_config.conf" | head -n 1)
+  vpn_ip=$(grep 'Peer Connection Initiated with \[AF_INET\]' "$(get_protonvpn_cli_home)/connection_logs" | head -n 1| awk -F '[[AF_INET]]' '{print $2}' | cut -d ':' -f1)
+  vpn_port=$(grep 'Peer Connection Initiated with \[AF_INET\]' "$(get_protonvpn_cli_home)/connection_logs" | head -n 1| awk -F '[[AF_INET]]' '{print $2}' | cut -d ':' -f2)
   vpn_device_name=$(grep -P "TUN/TAP device (.)+ opened" "$(get_protonvpn_cli_home)/connection_logs" | awk '{print $9}')
-  echo "$vpn_ip@$vpn_port@$vpn_type@$vpn_device_name"
+  gateway_interface=$(grep 'IFACE=' "$(get_protonvpn_cli_home)/connection_logs" | head -n 1| awk -F 'IFACE=' '{print $2}' | cut -d ' ' -f1)
+  echo "$vpn_ip@$vpn_port@$vpn_type@$vpn_device_name@$gateway_interface"
 }
 
 function killswitch() {
@@ -757,20 +758,46 @@ function killswitch() {
 
   if [[ $1 == "enable" ]]; then
     if [[ $(detect_platform_type) == "linux" ]]; then
+      vpn_ip=$(get_openvpn_config_info | cut -d "@" -f1)
       vpn_port=$(get_openvpn_config_info | cut -d "@" -f2)
       vpn_type=$(get_openvpn_config_info | cut -d "@" -f3)
       vpn_device_name=$(get_openvpn_config_info | cut -d "@" -f4)
+      interface=$(get_openvpn_config_info | cut -d "@" -f5)
       iptables -F
+
+      #Set default policy to block all traffic
       iptables -P INPUT DROP
       iptables -P OUTPUT DROP
       iptables -P FORWARD DROP
+      
+      #Allow loopback and ping traffic
+      iptables -A INPUT -i lo -j ACCEPT
+      iptables -A OUTPUT -o lo -j ACCEPT 
+      iptables -A OUTPUT -o "$vpn_device_name" -p icmp -j ACCEPT
 
+      #allow only vpn remote address through interface
+      iptables -A OUTPUT -o "$interface" -d "$vpn_ip" -p "$vpn_type" -m "$vpn_type" --dport "$vpn_port" -j ACCEPT
+      iptables -A INPUT -i "$interface" -s "$vpn_ip" -p "$vpn_type" -m "$vpn_type" --sport "$vpn_port" -j ACCEPT
+
+      #allow input and output via the openvpn tunnel
       iptables -A OUTPUT -o "$vpn_device_name" -j ACCEPT
       iptables -A INPUT -i "$vpn_device_name" -j ACCEPT
-      iptables -A INPUT -i "$vpn_device_name" -m state --state ESTABLISHED,RELATED -j ACCEPT
-      iptables -A OUTPUT -o "$vpn_device_name" -m state --state ESTABLISHED,RELATED -j ACCEPT
-      iptables -A OUTPUT -p "$vpn_type" -m "$vpn_type" --dport "$vpn_port" -j ACCEPT
-      iptables -A INPUT -p "$vpn_type" -m "$vpn_type" --sport "$vpn_port" -j ACCEPT
+
+      #Allow custom DNS output and related input if used
+      if [[ -f "$(get_protonvpn_cli_home)/.custom_dns" ]]; then
+      	custom_dns="$(get_protonvpn_cli_home)/.custom_dns"
+       	dns_server=$(< "$custom_dns")
+      	iptables -A OUTPUT -D "$dns_server" -j ACCEPT
+	iptables -A INPUT --src "$dns_server" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 
+      fi
+
+      #Allow networkmanager to detect internet access (ip address is for ARCH)
+      #Uncomment these and put ip address applicable to your distro to allow network manager to 
+      #display correct network status in menubar. 
+      	#iptables -A OUTPUT -o wlo1 -d 138.201.81.199 -p tcp -m tcp --dport 80 -j ACCEPT
+	#iptables -A INPUT -i wlo1 --src 138.201.81.199 -p tcp -m tcp --sport 80 -j ACCEPT
+
+      echo "[$] Killswitch Enabled!"
 
     elif [[ $(detect_platform_type) == "macos" ]]; then
      # Todo: logic
@@ -781,11 +808,15 @@ function killswitch() {
   if [[ $1 == "disable" ]]; then
     if [[ $(detect_platform_type) == "linux" ]]; then
       iptables -F
+      iptables -P INPUT ACCEPT
+      iptables -P FORWARD ACCEPT
+      iptables -P OUTPUT ACCEPT
       iptables-restore < "$(get_protonvpn_cli_home)/.iptables.save"
     elif [[ $(detect_platform_type) == "macos" ]]; then
       # Todo: logic
       false
     fi
+      echo "[$] Killswitch Disabled!"
   fi
 }
 
