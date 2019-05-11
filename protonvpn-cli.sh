@@ -770,10 +770,9 @@ function killswitch() {
       iptables -P OUTPUT DROP
       iptables -P FORWARD DROP
       
-      #Allow loopback and ping traffic
+      #Allow loopback traffic
       iptables -A INPUT -i lo -j ACCEPT
       iptables -A OUTPUT -o lo -j ACCEPT 
-      iptables -A OUTPUT -o "$vpn_device_name" -p icmp -j ACCEPT
 
       #allow only vpn remote address through interface
       iptables -A OUTPUT -o "$interface" -d "$vpn_ip" -p "$vpn_type" -m "$vpn_type" --dport "$vpn_port" -j ACCEPT
