@@ -786,15 +786,15 @@ function killswitch() {
       if [[ -f "$(get_protonvpn_cli_home)/.custom_dns" ]]; then
       	custom_dns="$(get_protonvpn_cli_home)/.custom_dns"
        	dns_server=$(< "$custom_dns")
-      	iptables -A OUTPUT -D "$dns_server" -j ACCEPT
+      	iptables -A OUTPUT -d "$dns_server" -j ACCEPT
 	iptables -A INPUT --src "$dns_server" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 
       fi
 
       #Allow networkmanager to detect internet access (ip address is for ARCH)
       #Uncomment these and put ip address applicable to your distro to allow network manager to 
       #display correct network status in menubar. 
-      	#iptables -A OUTPUT -o wlo1 -d 138.201.81.199 -p tcp -m tcp --dport 80 -j ACCEPT
-	#iptables -A INPUT -i wlo1 --src 138.201.81.199 -p tcp -m tcp --sport 80 -j ACCEPT
+      	#iptables -A OUTPUT -o "$interface" -d 138.201.81.199 -p tcp -m tcp --dport 80 -j ACCEPT
+	#iptables -A INPUT -i "$interface" --src 138.201.81.199 -p tcp -m tcp --sport 80 -j ACCEPT
 
       echo "[$] Killswitch Enabled!"
 
